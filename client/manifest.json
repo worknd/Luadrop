@@ -1,6 +1,7 @@
 {
-    "name": "The easiest way to transfer files across devices",
+    "name": "Luadrop",
     "short_name": "Luadrop",
+    "description": "The easiest way to transfer files across devices",
     "icons": [{
         "src": "images/android-chrome-192x192.png",
         "sizes": "192x192",
@@ -25,9 +26,10 @@
         "type": "image/png"
     }],
     "background_color": "#efefef",
-    "start_url": "/index.html",
-    "display": "minimal-ui",
     "theme_color": "#3367d6",
+    "start_url": "/index.html",
+    "display": "standalone",
+    "orientation": "any",
     "share_target": {
         "method":"GET",
         "action": "/?share_target",
