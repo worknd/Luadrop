@@ -5,17 +5,17 @@
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <!-- Web App Config -->
-    <title>Snapdrop</title>
+    <title>Luadrop</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#3367d6">
     <meta name="color-scheme" content="dark light">
     <meta name="apple-mobile-web-app-capable" content="no">
-    <meta name="apple-mobile-web-app-title" content="Snapdrop">
+    <meta name="apple-mobile-web-app-title" content="Luadrop">
     <!-- Descriptions -->
     <meta name="description" content="Instantly share images, videos, PDFs, and links with people nearby. Peer2Peer and Open Source. No Setup, No Signup.">
     <meta name="keywords" content="File, Transfer, Share, Peer2Peer">
     <meta name="author" content="RobinLinus">
-    <meta property="og:title" content="Snapdrop">
+    <meta property="og:title" content="Luadrop">
     <meta property="og:type" content="article">
     <meta property="og:url" content="https://snapdrop.net/">
     <meta property="og:author" content="https://facebook.com/RobinLinus">
@@ -38,7 +38,7 @@
 
 <body translate="no">
     <header class="row-reverse">
-        <a href="#about" class="icon-button" title="About Snapdrop">
+        <a href="#about" class="icon-button" title="About Luadrop">
             <svg class="icon">
                 <use xlink:href="#info-outline" />
             </svg>
@@ -53,16 +53,21 @@
                 <use xlink:href="#notifications" />
             </svg>
         </a>
-        <a href="#" id="install" class="icon-button" title="Install Snapdrop" hidden>
+        <a href="#" id="install" class="icon-button" title="Install Luadrop" hidden>
             <svg class="icon">
                 <use xlink:href="#homescreen" />
+            </svg>
+        </a>
+        <a href="#" id="invite" class="icon-button" title="QR-code for invite" hidden>
+            <svg class="icon">
+                <use xlink:href="#qr-icon" />
             </svg>
         </a>
     </header>
     <!-- Peers -->
     <x-peers class="center"></x-peers>
     <x-no-peers>
-        <h2>Open Snapdrop on other devices to send files</h2>
+        <h2>Open Luadrop on other devices to send files</h2>
     </x-no-peers>
     <x-instructions desktop="Click to send files or right click to send a message" mobile="Tap to send files or long tap to send a message"></x-instructions>
     <!-- Footer -->
@@ -122,6 +127,24 @@
             </x-paper>
         </x-background>
     </x-dialog>
+    <!-- Invite Dialog -->
+    <x-dialog id="inviteDialog">
+        <x-background class="full center">
+            <x-paper shadow="2">
+                <h3>You can see anyone on this page</h3>
+                <div class="font-body2">Even if the person is not on this network.<br>Just send this link or QR code:</div>
+                <div class="font-link" id="inviteLink"></div>
+                <div>
+                    <qr-code id="qrcode" module-color="#4285f4" style="background-color:#fff;border-radius:8px;">
+                    </qr-code>
+                </div>
+                <div class="row-reverse">
+                    <button class="button" id="copyLink" close autofocus>Copy Link</button>
+                    <button class="button" close>Close</button>
+                </div>
+            </x-paper>
+        </x-background>
+    </x-dialog>
     <!-- Toast -->
     <div class="toast-container full center">
         <x-toast class="row" shadow="1" id="toast">File Transfer Completed</x-toast>
@@ -139,8 +162,8 @@
             <svg class="icon logo">
                 <use xlink:href="#wifi-tethering" />
             </svg>
-            <h1>Snapdrop</h1>
-            <div class="font-subheading">The easiest way to transfer files across devices</div>
+            <h1>Luadrop</h1>
+            <div class="font-subheading">The easiest way to transfer files across devices.<br>Inspired by Snapdrop and based on their code.</div>
             <div class="row">
                 <a class="icon-button" target="_blank" href="https://github.com/RobinLinus/snapdrop" title="Snapdrop on Github" rel="noreferrer">
                     <svg class="icon">
@@ -210,12 +233,16 @@
         <symbol id="icon-theme" viewBox="0 0 24 24">
          <rect fill="none" height="24" width="24"/><path d="M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36c-0.98,1.37-2.58,2.26-4.4,2.26 c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"/>
         </symbol>
+        <symbol id=qr-icon viewBox="0 0 24 24">
+            <path d="M3 9h6V3H3zm1-5h4v4H4zm1 1h2v2H5zm10 4h6V3h-6zm1-5h4v4h-4zm1 1h2v2h-2zM3 21h6v-6H3zm1-5h4v4H4zm1 1h2v2H5zm15 2h1v2h-2v-3h1zm0-3h1v1h-1zm0-1v1h-1v-1zm-10 2h1v4h-1v-4zm-4-7v2H4v-1H3v-1h3zm4-3h1v1h-1zm3-3v2h-1V3h2v1zm-3 0h1v1h-1zm10 8h1v2h-2v-1h1zm-1-2v1h-2v2h-2v-1h1v-2h3zm-7 4h-1v-1h-1v-1h2v2zm6 2h1v1h-1zm2-5v1h-1v-1zm-9 3v1h-1v-1zm6 5h1v2h-2v-2zm-3 0h1v1h-1v1h-2v-1h1v-1zm0-1v-1h2v1zm0-5h1v3h-1v1h-1v1h-1v-2h-1v-1h3v-1h-1v-1zm-9 0v1H4v-1zm12 4h-1v-1h1zm1-2h-2v-1h2zM8 10h1v1H8v1h1v2H8v-1H7v1H6v-2h1v-2zm3 0V8h3v3h-2v-1h1V9h-1v1zm0-4h1v1h-1zm-1 4h1v1h-1zm3-3V6h1v1z"/><path fill="none" d="M0 0h24v24H0z"/>
+        </symbol>
     </svg>
     <!-- Scripts -->
     <script src="scripts/network.js"></script>
     <script src="scripts/ui.js"></script>
     <script src="scripts/theme.js" async></script>
     <script src="scripts/clipboard.js" async></script>
+    <script src="scripts/qr-code.js" async></script>
     <!-- Sounds -->
     <audio id="blop" autobuffer="true">
         <source src="sounds/blop.mp3" type="audio/mpeg">
@@ -225,7 +252,7 @@
     <noscript>
         <x-noscript class="full center column">
             <h1>Enable JavaScript</h1>
-            <h3>Snapdrop works only with JavaScript</h3>
+            <h3>Luadrop works only with JavaScript</h3>
         </x-noscript>
         <style>
         x-noscript {

@@ -2,7 +2,6 @@ const $ = query => document.getElementById(query);
 const $$ = query => document.body.querySelector(query);
 const isURL = text => /^((https?:\/\/|www)[^\s]+)/g.test(text.toLowerCase());
 window.isDownloadSupported = (typeof document.createElement('a').download !== 'undefined');
-window.isProductionEnvironment = !window.location.host.startsWith('localhost');
 window.iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
 // set display name
@@ -11,6 +10,18 @@ Events.on('display-name', e => {
     const $displayName = $('displayName')
     $displayName.textContent = 'You are known as ' + me.displayName;
     $displayName.title = me.deviceName;
+    const invite = $('invite');
+    if (!window.room) {
+        invite.addEventListener('click', function() {
+            Events.fire('show-invite');
+        });
+    }
+    window.room = me.room;
+    invite.removeAttribute('hidden');
+});
+
+Events.on('connection-lost', _ => {
+    $('invite').setAttribute('hidden', true);
 });
 
 class PeersUI {
@@ -353,7 +364,7 @@ class ReceiveTextDialog extends Dialog {
         super('receiveTextDialog');
         Events.on('text-received', e => this._onText(e.detail))
         this.$text = this.$el.querySelector('#text');
-        const $copy = this.$el.querySelector('#copy');
+        const copy = this.$el.querySelector('#copy');
         copy.addEventListener('click', _ => this._onCopy());
     }
 
@@ -376,6 +387,32 @@ class ReceiveTextDialog extends Dialog {
     async _onCopy() {
         await navigator.clipboard.writeText(this.$text.textContent);
         Events.fire('notify-user', 'Copied to clipboard');
+    }
+}
+
+class InviteDialog extends Dialog {
+    constructor() {
+        super('inviteDialog');
+        Events.on('show-invite', e => this._onShow())
+        this.$link = this.$el.querySelector('#inviteLink');
+        const copy = this.$el.querySelector('#copyLink');
+        copy.addEventListener('click', _ => this._onCopyLink());
+    }
+
+    _onShow() {
+        const url = new URL(window.location)
+        url.search = '?room=' + window.room;
+        url.hash = '';
+        this.$link.textContent = url.href;
+        const qrcode = this.$el.querySelector('#qrcode');
+        qrcode.contents = url.href;
+        qrcode.animateQRCode('MaterializeIn');
+        this.show();
+    }
+
+    async _onCopyLink() {
+        await navigator.clipboard.writeText(this.$link.textContent);
+        Events.fire('notify-user', 'Link was copied to clipboard');
     }
 }
 
@@ -435,12 +472,12 @@ class Notifications {
         }
 
         // Notification is persistent on Android. We have to close it manually
-        const visibilitychangeHandler = () => {                             
-            if (document.visibilityState === 'visible') {    
+        const visibilitychangeHandler = () => {
+            if (document.visibilityState === 'visible') {
                 notification.close();
                 Events.off('visibilitychange', visibilitychangeHandler);
-            }                                                       
-        };                                                                                
+            }
+        };
         Events.on('visibilitychange', visibilitychangeHandler);
 
         return notification;
@@ -488,7 +525,6 @@ class Notifications {
     }
 }
 
-
 class NetworkStatusUI {
 
     constructor() {
@@ -516,7 +552,7 @@ class WebShareTargetUI {
         let shareTargetText = title ? title : '';
         shareTargetText += text ? shareTargetText ? ' ' + text : text : '';
 
-        if(url) shareTargetText = url; // We share only the Link - no text. Because link-only text becomes clickable.
+        if (url) shareTargetText = url; // We share only the Link - no text. Because link-only text becomes clickable.
 
         if (!shareTargetText) return;
         window.shareTargetText = shareTargetText;
@@ -525,8 +561,7 @@ class WebShareTargetUI {
     }
 }
 
-
-class Snapdrop {
+class Luadrop {
     constructor() {
         const server = new ServerConnection();
         const peers = new PeersManager(server);
@@ -535,6 +570,7 @@ class Snapdrop {
             const receiveDialog = new ReceiveDialog();
             const sendTextDialog = new SendTextDialog();
             const receiveTextDialog = new ReceiveTextDialog();
+            const inviteDialog = new InviteDialog();
             const toast = new Toast();
             const notifications = new Notifications();
             const networkStatusUI = new NetworkStatusUI();
@@ -543,15 +579,13 @@ class Snapdrop {
     }
 }
 
-const snapdrop = new Snapdrop();
-
-
+const luadrop = new Luadrop();
 
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/service-worker.js')
         .then(serviceWorker => {
-            console.log('Service Worker registered');
             window.serviceWorker = serviceWorker
+            console.log('Service Worker registered');
         });
 }
 

@@ -126,6 +126,14 @@ body {
     line-height: 18px;
 }
 
+.font-link {
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 400;
+    margin: 12px 0;
+    color: var(--primary-color);
+}
+
 a {
     text-decoration: none;
     color: currentColor;
@@ -717,13 +725,15 @@ x-dialog x-paper {
     color: var(--text-color);
     background-color: var(--bg-color-secondary);
 }
+
 /* Image Preview */
 #img-preview{
     max-height: 50vh;
+    max-width: 352px;
+    object-fit: contain;
     margin: auto;
     display: block;
 }
-
 
 /* Styles for users who prefer dark mode at the OS level */
 @media (prefers-color-scheme: dark) {

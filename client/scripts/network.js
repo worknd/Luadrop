@@ -7,6 +7,7 @@ class ServerConnection {
         this._connect();
         Events.on('beforeunload', e => this._disconnect());
         Events.on('pagehide', e => this._disconnect());
+        Events.on('online', e => this._refresh());
         document.addEventListener('visibilitychange', e => this._onVisibilityChange());
     }
 
@@ -58,7 +59,8 @@ class ServerConnection {
         // hack to detect if deployment or development environment
         const protocol = location.protocol.startsWith('https') ? 'wss' : 'ws';
         const webrtc = window.isRtcSupported ? '/webrtc' : '/fallback';
-        const url = protocol + '://' + location.host + location.pathname + 'server' + webrtc;
+        const search = window.location.search
+        const url = protocol + '://' + location.host + location.pathname + 'server' + webrtc + search;
         return url;
     }
 
@@ -70,6 +72,7 @@ class ServerConnection {
 
     _onDisconnect() {
         console.log('WS: server disconnected');
+        Events.fire('connection-lost', 0);
         Events.fire('notify-user', 'Connection lost. Retry in 5 seconds...');
         clearTimeout(this._reconnectTimer);
         this._reconnectTimer = setTimeout(_ => this._connect(), 5000);
@@ -77,6 +80,11 @@ class ServerConnection {
 
     _onVisibilityChange() {
         if (document.hidden) return;
+        this._refresh();
+    }
+
+    _refresh() {
+        if (this._isConnected() || this._isConnecting()) return;
         this._connect();
     }
 

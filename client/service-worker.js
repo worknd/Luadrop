@@ -1,14 +1,21 @@
-var CACHE_NAME = 'snapdrop-cache-v2';
+var CACHE_NAME = 'luadrop-cache-v1';
 var urlsToCache = [
+  '/',
   'index.html',
-  './',
   'styles.css',
+  'manifest.json',
   'scripts/network.js',
   'scripts/ui.js',
-  'scripts/clipboard.js',
   'scripts/theme.js',
+  'scripts/clipboard.js',
+  'scripts/qr-code.js',
+  'scripts/qr-code.resources.js',
+  'scripts/qr-code.animation.js',
   'sounds/blop.mp3',
-  'images/favicon-96x96.png'
+  'sounds/blop.ogg',
+  'images/logo_transparent_128x128.png',
+  'images/favicon-96x96.png',
+  'images/android-chrome-192x192.png'
 ];
 
 self.addEventListener('install', function(event) {
@@ -21,7 +28,6 @@ self.addEventListener('install', function(event) {
       })
   );
 });
-
 
 self.addEventListener('fetch', function(event) {
   event.respondWith(
@@ -36,7 +42,6 @@ self.addEventListener('fetch', function(event) {
     )
   );
 });
-
 
 self.addEventListener('activate', function(event) {
   console.log('Updating Service Worker...')

@@ -1,6 +1,6 @@
 {
-    "name": "Snapdrop",
-    "short_name": "Snapdrop",
+    "name": "The easiest way to transfer files across devices",
+    "short_name": "Luadrop",
     "icons": [{
         "src": "images/android-chrome-192x192.png",
         "sizes": "192x192",
@@ -25,12 +25,13 @@
         "type": "image/png"
     }],
     "background_color": "#efefef",
-    "start_url": "/",
+    "start_url": "/index.html",
     "display": "minimal-ui",
     "theme_color": "#3367d6",
     "share_target": {
         "method":"GET",
         "action": "/?share_target",
+        "enctype": "application/x-www-form-urlencoded",
         "params": {
             "title": "title",
             "text": "text",
