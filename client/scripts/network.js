@@ -7,7 +7,7 @@ class ServerConnection {
         this._connect();
         Events.on('beforeunload', e => this._disconnect());
         Events.on('pagehide', e => this._disconnect());
-        Events.on('online', e => this._refresh());
+        Events.on('online', e => this._connect());
         document.addEventListener('visibilitychange', e => this._onVisibilityChange());
     }
 
@@ -48,10 +48,25 @@ class ServerConnection {
             default:
                 console.error('WS: unkown message type', msg);
         }
+        this._watchdog(false);
+    }
+
+    _watchdog(isTimer) {
+        if (!this._isConnected()) return;
+        if (isTimer) {
+            // Timer expired so we have problem with our current connection.
+            // The best way is to close it and try to open new connection.
+            console.log('WS: watchdog timer expired, reconnect');
+            this._disconnect();
+            this._connect();
+        } else {
+            clearTimeout(this._watchdogTimer);
+            this._watchdogTimer = setTimeout(t => this._watchdog(t), 45000, true);
+        }    
     }
 
     send(message) {
-        if (!this._isConnected()) return;
+        if (!this._isConnected()) return this._connect();
         this._socket.send(JSON.stringify(message));
     }
 
@@ -68,9 +83,11 @@ class ServerConnection {
         this.send({ type: 'disconnect' });
         this._socket.onclose = null;
         this._socket.close();
+        this._socket = null;
     }
 
     _onDisconnect() {
+        this._socket = null;
         console.log('WS: server disconnected');
         Events.fire('connection-lost', 0);
         Events.fire('notify-user', 'Connection lost. Retry in 5 seconds...');
@@ -80,11 +97,6 @@ class ServerConnection {
 
     _onVisibilityChange() {
         if (document.hidden) return;
-        this._refresh();
-    }
-
-    _refresh() {
-        if (this._isConnected() || this._isConnecting()) return;
         this._connect();
     }
 
@@ -315,12 +327,15 @@ class RTCPeer extends Peer {
     }
 
     _onConnectionStateChange(e) {
+        if (!this._conn) return this._onChannelClosed();
         console.log('RTC: state changed:', this._conn.connectionState);
         switch (this._conn.connectionState) {
             case 'disconnected':
                 this._onChannelClosed();
                 break;
             case 'failed':
+                this._conn.close();
+            case 'closed':
                 this._conn = null;
                 this._onChannelClosed();
                 break;
@@ -328,6 +343,7 @@ class RTCPeer extends Peer {
     }
 
     _onIceConnectionStateChange() {
+        if (!this._conn) return;
         switch (this._conn.iceConnectionState) {
             case 'failed':
                 console.error('ICE Gathering failed');
@@ -374,6 +390,7 @@ class PeersManager {
         this._server = serverConnection;
         Events.on('signal', e => this._onMessage(e.detail));
         Events.on('peers', e => this._onPeers(e.detail));
+        Events.on('peer-joined', e => setTimeout(p => this._onPeerJoined(p), 5000, e.detail));
         Events.on('files-selected', e => this._onFilesSelected(e.detail));
         Events.on('send-text', e => this._onSendText(e.detail));
         Events.on('peer-left', e => this._onPeerLeft(e.detail));
@@ -387,36 +404,36 @@ class PeersManager {
     }
 
     _onPeers(peers) {
-        peers.forEach(peer => {
-            if (this.peers[peer.id]) {
-                this.peers[peer.id].refresh();
-                return;
-            }
-            if (window.isRtcSupported && peer.rtcSupported) {
-                this.peers[peer.id] = new RTCPeer(this._server, peer.id);
-            } else {
-                this.peers[peer.id] = new WSPeer(this._server, peer.id);
-            }
-        })
+        peers.forEach(peer => this._onPeerJoined(peer));
     }
 
-    sendTo(peerId, message) {
-        this.peers[peerId].send(message);
+    _onPeerJoined(peer) {
+        if (this.peers[peer.id]) {
+            this.peers[peer.id].refresh();
+            return;
+        }
+        if (window.isRtcSupported && peer.rtcSupported) {
+            this.peers[peer.id] = new RTCPeer(this._server, peer.id);
+        } else {
+            this.peers[peer.id] = new WSPeer(this._server, peer.id);
+        }
     }
 
     _onFilesSelected(message) {
+        if (!this.peers[message.to]) return;
         this.peers[message.to].sendFiles(message.files);
     }
 
     _onSendText(message) {
+        if (!this.peers[message.to]) return;
         this.peers[message.to].sendText(message.text);
     }
 
     _onPeerLeft(peerId) {
         const peer = this.peers[peerId];
         delete this.peers[peerId];
-        if (!peer || !peer._peer) return;
-        peer._peer.close();
+        if (!peer || !peer._conn) return;
+        peer._conn.close();
     }
 
 }
@@ -530,7 +547,16 @@ class Events {
 
 RTCPeer.config = {
     'sdpSemantics': 'unified-plan',
-    'iceServers': [{
-        urls: 'stun:stun.l.google.com:19302'
-    }]
+    'iceServers': [
+        {urls: [
+            'stun:stun.l.google.com:19302',
+            'stun:stun1.l.google.com:19302',
+            'stun:stun2.l.google.com:19302',
+            'stun:stun3.l.google.com:19302',
+            'stun:stun4.l.google.com:19302'
+        ]},
+        {urls: 'stun:stunserver.org'},
+        {urls: 'stun:stun.voipstunt.com'},
+        {urls: 'stun:stun.schlund.de'}
+    ]
 }
