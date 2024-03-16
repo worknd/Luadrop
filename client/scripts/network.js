@@ -394,6 +394,15 @@ class PeersManager {
         Events.on('files-selected', e => this._onFilesSelected(e.detail));
         Events.on('send-text', e => this._onSendText(e.detail));
         Events.on('peer-left', e => this._onPeerLeft(e.detail));
+        this._watchdog(false);
+    }
+
+    _watchdog(isTimer) {
+        if (isTimer) {
+            Object.keys(this.peers).forEach(id => this.peers[id].refresh());
+        }
+        clearTimeout(this._watchdogTimer);
+        this._watchdogTimer = setTimeout(t => this._watchdog(t), 10000, true);
     }
 
     _onMessage(message) {
