@@ -553,19 +553,15 @@ class Events {
     }
 }
 
-
 RTCPeer.config = {
     'sdpSemantics': 'unified-plan',
     'iceServers': [
         {urls: [
             'stun:stun.l.google.com:19302',
-            'stun:stun1.l.google.com:19302',
-            'stun:stun2.l.google.com:19302',
-            'stun:stun3.l.google.com:19302',
-            'stun:stun4.l.google.com:19302'
+            'stun:stun1.l.google.com:19302'
         ]},
-        {urls: 'stun:stunserver.org'},
-        {urls: 'stun:stun.voipstunt.com'},
-        {urls: 'stun:stun.schlund.de'}
+        {urls: 'stun:stun.voipstunt.com:3478'},
+        {urls: 'stun:stun.schlund.de:3478'},
+        {urls: 'stun:stunserver.org:3478'}
     ]
 }
