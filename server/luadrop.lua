@@ -425,13 +425,13 @@ local function serve_peer(peer)
 
 	-- the loop handles all WebSocket activity
 	repeat
-		-- exit from loop on disappirance peer in common list 
+		-- exit from loop on disappirance peer in common list
 		if not room_list[peer.room] or not room_list[peer.room][peer.id] then
 			return
 		end
 
 		-- do ping-pong for keeping WebSocket connection alive
-		ok, err, errno = peer.ws:send_ping("?")
+		ok, err, errno = peer.ws:send_ping("Are you alive?")
 		if not ok then
 			log(err, errno, "Pinging WebSocket connection failed")
 			return
@@ -453,17 +453,19 @@ local function serve_peer(peer)
 			local msg = assert(json.decode(ok))
 			if type(msg) == "table" and msg["type"] then
 				if msg.type == "disconnect" then
-					-- peer wants to exit
-					return true
+					-- peer left the room
+					return
 				elseif msg.type == "pong" then
-					-- answer from peer
+					-- save time of answer from peer
 					last_beat = monotime()
 				elseif msg["to"] then
-					-- relay the message to recipient
+					-- try to relay the message to recipient
 					local to = msg.to
-					msg.to = nil
-					msg.sender = peer.id
-					send_msg(room_list[peer.room][to], msg)
+					if room_list[peer.room] and room_list[peer.room][to] then
+						msg.to = nil
+						msg.sender = peer.id
+						send_msg(room_list[peer.room][to], msg)
+					end
 				end
 			end
 		end
@@ -667,16 +669,20 @@ local luadrop_server = assert(http_server.listen {
 local function signal_handler(signum)
 	local signame = ""
 
+	-- get name of received signal
 	for name, val in pairs(signal) do
 		if type(val) == "number" and signum == val then
 			signame = name
 			break
 		end
 	end
+
 	log(nil, nil, "Received signal %s, stopping server", signame)
+	luadrop_server:pause()
 
 	-- all peers will be removed from rooms
 	room_list = {}
+
 	luadrop_server:close()
 end
 
