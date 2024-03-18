@@ -21,7 +21,7 @@ local x509 = require "openssl.x509"
 local chain = require "openssl.x509.chain"
 local sslctx = require "openssl.ssl.context"
 
-local b = require "http.bit"
+local bit = require "http.bit"
 local http_util = require "http.util"
 local http_version = require "http.version"
 local http_headers = require "http.headers"
@@ -38,7 +38,7 @@ local ping_timeout = 40
 
 -- options
 local debug_flag = false
-local port = 443
+local in_port = 443
 local www_dir = "/opt/share/www"
 local cert_file = "/opt/etc/ssl/certs/server.crt"
 local chain_file = "/opt/etc/ssl/certs/ca.crt"
@@ -72,10 +72,12 @@ local function log(err, errno, msg, ...)
 	syslog.syslog(syslog.LOG_USER + syslog.LOG_NOTICE, out)
 	syslog.closelog()
 
-	local fd = io.open(log_file, "a")
-	if fd then
-		fd:write(os.date("[%H:%M:%S] "), out, "\n")
-		fd:close()
+	if log_file then
+		local fd = io.open(log_file, "a")
+		if fd then
+			fd:write(os.date("[%H:%M:%S] "), out, "\n")
+			fd:close()
+		end
 	end
 end
 
@@ -93,37 +95,40 @@ local function read_all(filename)
 	return data
 end
 
-local function check_dir(path)
+local function validate_dir(path)
 	assert(path_pattern:match(path), "invalid path")
-	local dir = http_util.resolve_relative_path(",/", path)
-	assert(b.band(assert(stat.stat(dir)).st_mode, stat.S_IFDIR) ~= 0, dir .." not directory")
+	local dir = http_util.resolve_relative_path("./", path)
+	assert(bit.band(assert(stat.stat(dir)).st_mode, stat.S_IFDIR) ~= 0, dir .." not directory")
 	return dir
 end
 
-local function check_file(path)
+local function validate_file(path)
+	if #path == 0 then
+		return nil
+	end
 	assert(path_pattern:match(path), "invalid path")
-	local file = http_util.resolve_relative_path(",/", path)
-	assert(b.band(assert(stat.stat(file)).st_mode, stat.S_IFREG) ~= 0, file .. "not file")
+	local file = http_util.resolve_relative_path("./", path)
+	assert(bit.band(assert(stat.stat(file)).st_mode, stat.S_IFREG) ~= 0, file .. "not file")
 	return file
 end
 
 local function get_options()
 	for _, a in ipairs(arg) do
 		if a:sub(1, 1) ~= "-" then
-			www_dir = check_dir(a)
+			www_dir = validate_dir(a)
 		elseif a:sub(2, 3) == "p=" then
-			port = assert(tonumber(a:match("-p=(%d-)$")))
-			assert(port > 0 and port < 65536)
+			in_port = assert(tonumber(a:match("-p=(%d-)$")))
+			assert(in_port > 0 and in_port < 65536)
 		elseif a:sub(2, 3) == "c=" then
-			cert_file = check_file(a:sub(4))
+			cert_file = validate_file(a:sub(4))
 		elseif a:sub(2, 3) == "n=" then
-			chain_file = check_file(a:sub(4))
+			chain_file = validate_file(a:sub(4))
 		elseif a:sub(2, 3) == "k=" then
-			key_file = check_file(a:sub(4))
+			key_file = validate_file(a:sub(4))
 		elseif a:sub(2, 3) == "a=" then
-			ca_file = check_file(a:sub(4))
+			ca_file = validate_file(a:sub(4))
 		elseif a:sub(2, 3) == "l=" then
-			log_file = check_file(a:sub(4))
+			log_file = validate_file(a:sub(4))
 		elseif a:sub(2, 2) == "d" then
 			debug_flag = true
 		end
@@ -276,7 +281,7 @@ local function make_peer_name(agent, room)
 	}
 end
 
-local function create_peer(ws, stream, headers)
+local function create_peer(wsocket, headers)
 	local room
 
 	-- try to get room name from request query
@@ -297,7 +302,7 @@ local function create_peer(ws, stream, headers)
 		if forward then
 			room = forward:match("^%s*(%.%d)+%s*,")
 		else
-			room = select(2, stream:peername())
+			room = select(2, wsocket.stream:peername())
 		end
 
 		-- special hack for handling public IPv4
@@ -314,7 +319,7 @@ local function create_peer(ws, stream, headers)
 	end
 
 	return {
-		ws = ws,
+		ws = wsocket,
 		id = id,
 		room = room,
 		rtc = string.find(headers:get(":path"), "webrtc") ~= nil,
@@ -352,7 +357,7 @@ local function add_peer_to_room(peer)
 	log(nil, nil, "Peer %s adding to room %s", peer.id:sub(1, 8), peer.room)
 
 	local room = room_list[peer.room]
-	if room then
+	if room and next(room) then
 		-- notify all other peers in the room
 		for _, p in pairs(room) do
 			send_msg(p, {
@@ -361,7 +366,7 @@ local function add_peer_to_room(peer)
 			})
 		end
 
-		-- notify peer about the other peers in the room
+		-- notify the peer about the other peers in the room
 		local peers = {}
 		for _, p in pairs(room) do
 			table.insert(peers, p:get_info())
@@ -374,15 +379,15 @@ local function add_peer_to_room(peer)
 		end
 	end
 
-	-- if room does not exist yet, create it
+	-- if the room does not exist yet, create it
 	if not room_list[peer.room] then
 		room_list[peer.room] = {}
 	end
 
-	-- add peer to room
+	-- add the peer to the room
 	room_list[peer.room][peer.id] = peer
 
-	-- send to peer its device and display names
+	-- send to the peer about its names and room
 	return send_msg(peer, {
 		type = "display-name",
 		message = {
@@ -396,7 +401,7 @@ end
 local function remove_peer_from_room(peer)
 	log(nil, nil, "Peer %s removing from room %s", peer.id:sub(1, 8), peer.room)
 
-	-- room does not exist already
+	-- the room does not exist already
 	if not room_list[peer.room] then
 		return
 	end
@@ -404,7 +409,7 @@ local function remove_peer_from_room(peer)
 	-- remove the peer
 	room_list[peer.room][peer.id] = nil
 
-	-- if room is empty, also delete the whole room
+	-- if the room is empty, also delete the whole room
 	local room = room_list[peer.room]
 	if not next(room) then
 		room_list[peer.room] = nil
@@ -450,13 +455,14 @@ local function serve_peer(peer)
 		-- timeout for WebSocket ping-pong decreased to 10 sec 
 		ok, err, errno = peer.ws:receive(net_timeout)
 		if ok and err == "text" then
-			local msg = assert(json.decode(ok))
+
+			local msg = json.decode(ok)
 			if type(msg) == "table" and msg["type"] then
 				if msg.type == "disconnect" then
-					-- peer left the room
+					-- the peer left the room
 					return
 				elseif msg.type == "pong" then
-					-- save time of answer from peer
+					-- save time of answer from the peer
 					last_beat = monotime()
 				elseif msg["to"] then
 					-- try to relay the message to recipient
@@ -475,15 +481,15 @@ local function serve_peer(peer)
 	log(err, errno, "WebSocket connection was lost")
 end
 
-local function accept_ws_connection(ws, stream, req_headers, res_headers)
-	local peer = create_peer(ws, stream, req_headers)
+local function accept_ws_connection(wsocket, req_headers, res_headers)
+	local peer = create_peer(wsocket, req_headers)
 
 	local cookie = req_headers:get("cookie")
 	if not cookie or not cookie:find("peerid=") then
 		res_headers:append("set-cookie", "peerid=" .. peer.id .. "; SameSite=Strict; Secure")
 	end
 
-	local ok, err, errno = ws:accept({ headers = res_headers }, net_timeout)
+	local ok, err, errno = wsocket:accept({ headers = res_headers }, net_timeout)
 	if not ok then
 		log(err, errno, "WebSocket connection not accepted")
 		return
@@ -492,7 +498,7 @@ local function accept_ws_connection(ws, stream, req_headers, res_headers)
 	if add_peer_to_room(peer) then
 		serve_peer(peer)
 	end
-	ws:close(nil, "end of work", net_timeout)
+	wsocket:close(nil, "disconnect", net_timeout)
 
 	remove_peer_from_room(peer)
 end
@@ -535,7 +541,7 @@ local function write_headers(stream, headers, eos)
 
 	local ok, err, errno = stream:write_headers(headers, eos, net_timeout)
 	if not ok then
-		log(err, errno, "Writing headers failed")
+		log(err, errno, "Writing response headers failed")
 		return true, true
 	end
 	return true
@@ -544,7 +550,7 @@ end
 local function on_stream(server, stream) -- luacheck: ignore 212
 	local req_headers, err, errno = stream:get_headers(net_timeout)
 	if not req_headers then
-		log(err, errno, "Reading headers failed")
+		log(err, errno, "Reading request headers failed")
 		return true
 	end
 
@@ -576,9 +582,9 @@ local function on_stream(server, stream) -- luacheck: ignore 212
 	end
 
 	if req_method == "GET" then
-		local ws_conn = http_ws.new_from_stream(stream, req_headers)
-		if ws_conn then
-			accept_ws_connection(ws_conn, stream, req_headers, res_headers)
+		local wsocket = http_ws.new_from_stream(stream, req_headers)
+		if wsocket then
+			accept_ws_connection(wsocket, req_headers, res_headers)
 			return true
 		end
 	end
@@ -633,7 +639,7 @@ local function on_stream(server, stream) -- luacheck: ignore 212
 	if not err and req_method == "GET" then
 		local ok, err, errno = stream:write_body_from_file(fd, net_timeout)
 		if not ok then
-			log(err, errno, "Writing body failed")
+			log(err, errno, "Writing response body failed")
 		end
 	end
 
@@ -647,14 +653,14 @@ local luadrop_server = assert(http_server.listen {
 	tls = true,
 	ctx = assert(create_ctx()),
 	host = "0.0.0.0",
-	port = port,
+	port = in_port,
 	version = 1.1,
-	max_concurrent = 32,
+	max_concurrent = 64,
 	connection_setup_timeout = net_timeout,
 	intra_stream_timeout = net_timeout,
 	onstream = on_stream,
 	onerror = function(server, context, op, err, errno) -- luacheck: ignore 212
-		-- ignore this often error
+		-- ignore this often TLS handshake error
 		if op ~= "wrap" or not string.find(err or "", "starttls") or errno ~= cerr.EPIPE then
 			local msg = string.format("%s on %s failed {%d, %s}",
 				tostring(op), tostring(context), errno or 0, err or "")
@@ -678,11 +684,12 @@ local function signal_handler(signum)
 	end
 
 	log(nil, nil, "Received signal %s, stopping server", signame)
+
+	-- disable new connections to server
 	luadrop_server:pause()
-
-	-- all peers will be removed from rooms
+	-- remove all peers from rooms
 	room_list = {}
-
+	-- close main socket of server
 	luadrop_server:close()
 end
 
