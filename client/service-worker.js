@@ -19,44 +19,38 @@ var urlsToCache = [
 ];
 
 self.addEventListener('install', function(event) {
-  // Perform install steps
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(function(cache) {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
-      })
-  );
-});
-
-self.addEventListener('fetch', function(event) {
-  event.respondWith(
-    caches.match(event.request)
-      .then(function(response) {
-        // Cache hit - return response
-        if (response) {
-          return response;
-        }
-        return fetch(event.request);
-      }
-    )
-  );
+    // Perform install steps
+    event.waitUntil(
+        caches.open(CACHE_NAME).then((cache) => {
+            console.log('Filling cache...');
+            return cache.addAll(urlsToCache);
+        }).then(() => {self.skipWaiting();console.log('...Ok');})
+    );
 });
 
 self.addEventListener('activate', function(event) {
-  console.log('Updating Service Worker...')
-  event.waitUntil(
-    caches.keys().then(function(cacheNames) {
-      return Promise.all(
-        cacheNames.filter(function(cacheName) {
-          // Return true if you want to remove this cache,
-          // but remember that caches are shared across
-          // the whole origin
-          return true
-        }).map(function(cacheName) {
-          return caches.delete(cacheName);
+    event.waitUntil(
+        caches.keys().then((cacheNames) => {
+            return Promise.all(cacheNames.map((cache) => {
+                if(cache !== CACHE_NAME) {
+                    console.log('Deleting old cache:', cache);
+                    return caches.delete(cache);
+                }
+            }))
         })
-      );
-    })
-  );
+    )
+});
+
+function fromCache(request) {
+    return caches.open(CACHE_NAME).then((cache) =>
+        cache.match(request).then((matching) =>
+            matching || fetch(request).then((response) =>
+                {cache.put(request, response.clone());return response;}
+            )
+        )
+    );
+}
+
+self.addEventListener('fetch', function(event) {
+    event.respondWith(fromCache(event.request));
 });
