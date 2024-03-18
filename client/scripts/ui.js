@@ -10,14 +10,17 @@ Events.on('display-name', e => {
     const $displayName = $('displayName')
     $displayName.textContent = 'You are known as ' + me.displayName;
     $displayName.title = me.deviceName;
-    const invite = $('invite');
-    if (!window.room) {
-        invite.addEventListener('click', function() {
-            Events.fire('show-invite');
-        });
+
+    if (me.room) {
+        const invite = $('invite');
+        if (!window.room) {
+            invite.addEventListener('click', function() {
+                Events.fire('show-invite');
+            });
+            window.room = me.room;
+        }
+        invite.removeAttribute('hidden');
     }
-    window.room = me.room;
-    invite.removeAttribute('hidden');
 });
 
 Events.on('connection-lost', _ => {
@@ -584,7 +587,7 @@ const luadrop = new Luadrop();
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/service-worker.js')
         .then(serviceWorker => {
-            window.serviceWorker = serviceWorker
+            window.serviceWorker = serviceWorker;
             console.log('Service Worker registered');
         });
 }

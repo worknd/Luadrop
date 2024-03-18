@@ -424,7 +424,7 @@ class PeersManager {
         if (window.isRtcSupported && peer.rtcSupported) {
             this.peers[peer.id] = new RTCPeer(this._server, peer.id);
         } else {
-            this.peers[peer.id] = new WSPeer(this._server, peer.id);
+            this.peers[peer.id] = new WSPeer(peer.name.displayName);
         }
     }
 
@@ -448,10 +448,18 @@ class PeersManager {
 }
 
 class WSPeer {
-    _send(message) {
-        message.to = this._peerId;
-        this._server.send(message);
+
+    constructor(peerName) {
+        this._peerName = peerName;
     }
+
+    _errorMsg() {
+        Events.fire('notify-user', 'Sorry, but this feature is not available for ' + this._peerName);
+    }
+
+    refresh() {}
+    sendFiles() { this._errorMsg(); }
+    sendText() { this._errorMsg(); }
 }
 
 class FileChunker {
