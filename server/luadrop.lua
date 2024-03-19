@@ -36,31 +36,31 @@ local start_page = "/index.html"
 local net_timeout = 10
 local ping_timeout = 40
 
--- options
+-- server comman line options
 local debug_flag = false
 local in_port = 443
 local www_dir = "/opt/share/www"
+local log_file = "/tmp/luadrop.log"
 local cert_file = "/opt/etc/ssl/certs/server.crt"
 local chain_file = "/opt/etc/ssl/certs/ca.crt"
 local key_file = "/opt/etc/ssl/private/server.key"
-local ca_file = "/opt/etc/ssl/certs/ca-certificates.crt"
-local log_file = "/tmp/luadrop.log"
+local ca_file = "/opt/etc/ssl/cert.pem"
 
 -- common list of rooms and peers in every room
 local room_list = {}
 
--- For compatibility with __ipairs() from Lua 5.2
-local _source_ipairs = ipairs
-ipairs = function(t)
+-- For compatibility with __ipairs() and Lua 5.1
+local old_ipairs = ipairs
+local ipairs = function(t)
 	local metatable = getmetatable(t)
 	if metatable and metatable.__ipairs then
 		return metatable.__ipairs(t)
 	end
-	return _source_ipairs(t)
+	return old_ipairs(t)
 end
 
 local function log(err, errno, msg, ...)
-	local out = string.format(msg, ...)
+	local out = msg:format(...)
 
 	if err or errno then
 		out = out .. string.format(" {%d, %s}", errno or 0, err or "*")
@@ -196,7 +196,9 @@ local function create_ctx(verify)
 
 	ctx:setPrivateKey(key)
 	ctx:setCertificate(cert)
-	ctx:setCertificateChain(chn)
+	if chn then
+		ctx:setCertificateChain(chn)
+	end
 
 	return ctx
 end
@@ -313,7 +315,7 @@ local function create_peer(wsocket, headers)
 	end
 
 	local cookie = headers:get("cookie")
-	local id = select(3, string.find(cookie or "", "peerid=([%-%x]+)"))
+	local id = string.match(cookie or "", "peerid=([%-%x]+)")
 	if not id or (room_list[room] and room_list[room][id]) then
 		id = uuid_v4()
 	end
@@ -322,8 +324,8 @@ local function create_peer(wsocket, headers)
 		ws = wsocket,
 		id = id,
 		room = room,
-		rtc = string.find(headers:get(":path"), "webrtc") ~= nil,
-		name = make_peer_name(tostring(headers:get("user-agent")), room),
+		rtc = string.find(headers:get(":path") or "", "webrtc") ~= nil,
+		name = make_peer_name(headers:get("user-agent") or "", room),
 		get_info = function(self)
 			return {
 				id = self.id,
@@ -565,13 +567,15 @@ local function on_stream(server, stream) -- luacheck: ignore 212
 	res_headers:append(":status", nil)
 	res_headers:append("server", server_info)
 	res_headers:append("date", http_util.imf_date())
+	if req_headers:has("origin") then
+		res_headers:append("access-control-allow-origin", "*")
+	end
 
 	local req_method = req_headers:get(":method")
 	if req_method == "OPTIONS" then
 		res_headers:upsert(":status", "204")
 		if req_headers:has("access-control-request-method") then
 			res_headers:append("access-control-allow-methods", "OPTIONS, HEAD, GET")
-			res_headers:append("access-control-allow-origin", "*")
 			res_headers:append("access-control-allow-headers", "*")
 			res_headers:append("access-control-max-age", "86400")
 		else
@@ -631,10 +635,6 @@ local function on_stream(server, stream) -- luacheck: ignore 212
 
 	res_headers:upsert(":status", "200")
 	res_headers:append("content-type", mime_type)
-	res_headers:append("access-control-allow-origin", "*")
-	if req_method == "HEAD" then
-		res_headers:append("content-length", tostring(fd:seek("end")))
-	end
 	_, err = write_headers(stream, res_headers, req_method == "HEAD")
 	if not err and req_method == "GET" then
 		local ok, err, errno = stream:write_body_from_file(fd, net_timeout)
