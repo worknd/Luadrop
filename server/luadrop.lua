@@ -82,17 +82,21 @@ local function log(err, errno, msg, ...)
 end
 
 local function gethostname(mode)
-	local fd = assert(io.popen("/bin/hostname -" .. mode or "s"))
-	local hostname = assert(fd:read("*a"))
-	fd:close()
-	return hostname:match("^%s*(.-)%s*$")
+	local fd = io.popen("/bin/hostname -" .. mode or "s")
+	if fd then
+		local hostname = fd:read("*a")
+		fd:close()
+		return string.match(hostname or "", "^%s*(.-)%s*$")
+	end
 end
 
 local function read_all(filename)
-	local fd = assert(io.open(filename, "rb"))
-	local data = assert(fd:read("*a"))
-	fd:close()
-	return data
+	local fd = io.open(filename or "", "rb")
+	if fd then
+		local data = fd:read("*a")
+		fd:close()
+		return data
+	end
 end
 
 local function validate_dir(path)
@@ -103,13 +107,13 @@ local function validate_dir(path)
 end
 
 local function validate_file(path)
-	if #path == 0 then
-		return nil
-	end
 	assert(path_pattern:match(path), "invalid path")
-	local file = http_util.resolve_relative_path("./", path)
-	assert(bit.band(assert(stat.stat(file)).st_mode, stat.S_IFREG) ~= 0, file .. "not file")
-	return file
+	local real_path = http_util.resolve_relative_path("./", path)
+	local st = stat.stat(real_path)
+	if st and bit.band(st.st_mode, stat.S_IFREG) ~= 0 then
+		return real_path
+	end
+	log(nil, nil, "File %s not found", path)
 end
 
 local function get_options()
@@ -136,11 +140,17 @@ local function get_options()
 end
 
 local function read_key(filename)
-	return assert(pkey.new(read_all(filename), "pem", "pr"))
+	local pem = read_all(filename)
+	if pem then
+		return pkey.new(pem, "pem", "pr")
+	end
 end
 
 local function read_crt(filename)
-	return assert(x509.new(read_all(filename), "pem"))
+	local pem = read_all(filename)
+	if pem then
+		return x509.new(pem, "pem")
+	end
 end
 
 local function alpn_select(ssl, protos, version)
@@ -153,34 +163,95 @@ local function alpn_select(ssl, protos, version)
 	return nil
 end
 
-local function create_ctx(verify)
-	local cert = read_crt(cert_file)
-	local key = read_key(key_file)
+local function make_own_cert()
+	local sslext = require "openssl.x509.extension"
+	local sslname = require "openssl.x509.name"
+	local sslaltname = require "openssl.x509.altname"
 
-	local chn
-	if chain_file then
-		chn = chain.new()
-		local ca = read_crt(chain_file)
-		chn:add(ca)
+	-- build our certificate
+	local cert = x509.new()
+	cert:setVersion(3)
+	cert:setSerial(1 + rand.uniform(99999))
+
+	-- get name of host as CN and DNS name
+	local host_name = gethostname("d")
+	local cn = sslname.new()
+	local alt = sslaltname.new()
+	cn:add("CN", host_name)
+	alt:add("DNS", host_name)
+
+	-- subject and issuer is same (self-signed)
+	cert:setSubject(cn)
+	cert:setIssuer(cert:getSubject())
+	cert:setSubjectAlt(alt)
+
+	-- keyUsage = critical, digitalSignature
+	local ext = sslext.new("keyUsage", "critical,DER", basexx.from_hex("03020780"))
+	-- extendedKeyUsage = serverAuth, clientAuth
+	local ext2 = sslext.new("extendedKeyUsage", "DER",
+		basexx.from_hex("301406082B0601050507030106082B06010505070302"))
+	cert:addExtension(ext)
+	cert:addExtension(ext2)
+	cert:setBasicConstraints { CA = true, pathLen = 0 }
+	cert:setBasicConstraintsCritical(true)
+
+	-- good for one year
+	local issued, expires = cert:getLifetime()
+	cert:setLifetime(issued, expires + 365 * 24 * 60 * 60)
+
+	-- generate private key and sign our certificate
+	local key = pkey.new { type = "EC", curve = "prime256v1" }
+	cert:setPublicKey(key)
+	cert:sign(key)
+
+	log(nil, nil, cert:text())
+
+	return cert, key
+end
+
+local function verify_cert(cert, key, chn)
+	local sslstore = require "openssl.x509.store"
+
+	local store = sslstore.new()
+	store:add(ca_file)
+
+	local ok, err, errno = store:verify(cert, chn)
+	if not ok then
+		log(err, errno, "Verification failed")
+		return nil
 	end
 
-	if ca_file then
-		local store = require "openssl.x509.store"
-		local st = store.new()
-		st:add(ca_file)
-
-		local ok, err, errno = st:verify(cert, chn)
-		if not ok then
-			log(err, errno, "Verification failed")
-			return nil
+	log(nil, nil, "Verification successful")
+	if debug_flag then
+		for _, val in ipairs(err) do
+			log(nil, nil, val:text())
 		end
+	end
 
-		log(nil, nil, "Verification successful")
-		if debug_flag then
-			for _, val in ipairs(err) do
-				log(nil, nil, val:text())
+	return true
+end
+
+local function create_ctx(verify)
+	local chn
+	local cert = read_crt(cert_file)
+	local key = read_key(key_file)
+	if cert and key then
+		if chain_file then
+			chn = chain.new()
+			local ca = read_crt(chain_file)
+			if ca then
+				chn:add(ca)
+			else
+				chn = nil
 			end
 		end
+
+		if ca_file then
+			verify_cert(cert, key, chn)
+		end
+	else
+		log(nil, nil, "No valid cert and key, use self signed cert")
+		cert, key = make_own_cert()
 	end
 
 	local ctx = sslctx.new("TLS", true)
@@ -202,8 +273,6 @@ local function create_ctx(verify)
 
 	return ctx
 end
-
-----------------------------------------------------
 
 -- return uuid of form xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
 local function uuid_v4()
