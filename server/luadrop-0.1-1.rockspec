@@ -9,7 +9,7 @@ description = {
 
 source = {
 	dir = "Luadrop-0.1/server",
-	url = "https://github.com/worknd/Luadrop/archive/refs/tags/0.1.zip",
+	url = "https://github.com/worknd/Luadrop/archive/refs/tags/v0.1.zip",
 	tag = "v0.1"
 }
 
@@ -22,9 +22,12 @@ dependencies = {
 
 build = {
 	type = "builtin",
+	modules = {
+		luadrop = "luadrop.lua"
+	},
 	install = {
-		lua = {
-			luadrop = "luadrop.lua";
+		bin = {
+			luadrop = "luadrop.lua"
 		}
 	}
 }
