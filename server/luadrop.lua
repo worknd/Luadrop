@@ -81,12 +81,16 @@ local function log(err, errno, msg, ...)
 	end
 end
 
-local function gethostname(mode)
-	local fd = io.popen("/bin/hostname -" .. mode or "s")
-	if fd then
-		local hostname = fd:read("*a")
-		fd:close()
-		return string.match(hostname or "", "^%s*(.-)%s*$")
+local function gethostname()
+	for _, mode in ipairs({ "d", "f", "s" }) do
+		local fd = io.popen("hostname -" .. mode)
+		if fd then
+			local hostname = fd:read("*a")
+			fd:close()
+			if hostname and #hostname > 0 then
+				return string.match(hostname or "", "^%s*(.-)%s*$")
+			end
+		end
 	end
 end
 
@@ -174,7 +178,7 @@ local function make_own_cert()
 	cert:setSerial(1 + rand.uniform(99999))
 
 	-- get name of host as CN and DNS name
-	local host_name = gethostname("d")
+	local host_name = gethostname()
 	local cn = sslname.new()
 	local alt = sslaltname.new()
 	cn:add("CN", host_name)
@@ -776,7 +780,7 @@ do
 	end
 
 	log(nil, nil, "Server '%s' started and listening on port %d",
-		tostring(gethostname("d")),
+		gethostname(),
 		select(3, luadrop_server:localname()))
 end
 
