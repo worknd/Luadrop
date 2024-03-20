@@ -1,5 +1,5 @@
 package = "luadrop"
-version = "0.1"
+version = "0.1-1"
 
 description = {
 	summary = "Luadrop HTTPS and WebSocket server",
@@ -23,7 +23,7 @@ dependencies = {
 build = {
 	type = "builtin",
 	install = {
-		bin = {
+		lua = {
 			luadrop = "luadrop.lua";
 		}
 	}
