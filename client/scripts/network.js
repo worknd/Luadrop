@@ -61,7 +61,7 @@ class ServerConnection {
             this._connect();
         } else {
             clearTimeout(this._watchdogTimer);
-            this._watchdogTimer = setTimeout(t => this._watchdog(t), 45000, true);
+            this._watchdogTimer = setTimeout(t => this._watchdog(t), 50 * 1000, true);
         }    
     }
 
