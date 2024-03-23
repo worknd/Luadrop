@@ -82,7 +82,7 @@ local function log(err, errno, msg, ...)
 end
 
 local function gethostname()
-	for _, mode in ipairs({ "d", "f", "s" }) do
+	for _, mode in ipairs{ "d", "f", "s" } do
 		local fd = io.popen("hostname -" .. mode)
 		if fd then
 			local hostname = fd:read("*a")
@@ -106,18 +106,15 @@ end
 local function validate_dir(path)
 	assert(path_pattern:match(path), "invalid path")
 	local dir = http_util.resolve_relative_path("./", path)
-	assert(bit.band(assert(stat.stat(dir)).st_mode, stat.S_IFDIR) ~= 0, dir .." not directory")
+	assert(bit.band(assert(stat.stat(dir)).st_mode, stat.S_IFDIR) ~= 0, dir .." not a directory")
 	return dir
 end
 
 local function validate_file(path)
 	assert(path_pattern:match(path), "invalid path")
-	local real_path = http_util.resolve_relative_path("./", path)
-	local st = stat.stat(real_path)
-	if st and bit.band(st.st_mode, stat.S_IFREG) ~= 0 then
-		return real_path
-	end
-	log(nil, nil, "File %s not found", path)
+	local file = http_util.resolve_relative_path("./", path)
+	assert(bit.band(assert(stat.stat(file)).st_mode, stat.S_IFREF) ~= 0, file .." not a file")
+	return file
 end
 
 local function get_options()
@@ -500,7 +497,7 @@ local function remove_peer_from_room(peer)
 end
 
 local function serve_peer(peer)
-	local last_beat = monotime()
+	local last_answer = monotime()
 	local ok, err, errno
 
 	-- the loop handles all WebSocket activity
@@ -518,10 +515,10 @@ local function serve_peer(peer)
 		end
 
 		-- keeping connection with browser application
-		if monotime() > (last_beat + ping_timeout * 2) then
+		if monotime() > (last_answer + ping_timeout * 2) then
 			log(nil, nil, "Timeout for answer from %s expired", peer.id:sub(1, 8))
 			return
-		elseif monotime() > (last_beat + ping_timeout) then
+		elseif monotime() > (last_answer + ping_timeout) then
 			if not send_msg(peer, { type = "ping" }) then
 				return
 			end
@@ -538,7 +535,7 @@ local function serve_peer(peer)
 					return
 				elseif msg.type == "pong" then
 					-- save time of answer from the peer
-					last_beat = monotime()
+					last_answer = monotime()
 				elseif msg["to"] then
 					-- try to relay the message to recipient
 					local to = msg.to
