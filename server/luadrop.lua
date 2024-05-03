@@ -1,4 +1,4 @@
-#!/usr/bin/env lua
+#!/opt/bin/env lua
 
 --[[
 Luadrop HTTPS and WebSocket server.
@@ -14,12 +14,7 @@ local json = require "cjson"
 local syslog = require "posix.syslog"
 local signal = require "posix.signal"
 local stat = require "posix.sys.stat"
-
 local rand = require "openssl.rand"
-local pkey = require "openssl.pkey"
-local x509 = require "openssl.x509"
-local chain = require "openssl.x509.chain"
-local sslctx = require "openssl.ssl.context"
 
 local bit = require "http.bit"
 local http_util = require "http.util"
@@ -141,16 +136,18 @@ local function get_options()
 end
 
 local function read_key(filename)
+	local ssl_pkey = require "openssl.pkey"
 	local pem = read_all(filename)
 	if pem then
-		return pkey.new(pem, "pem", "pr")
+		return ssl_pkey.new(pem, "pem", "pr")
 	end
 end
 
 local function read_crt(filename)
+	local ssl_x509 = require "openssl.x509"
 	local pem = read_all(filename)
 	if pem then
-		return x509.new(pem, "pem")
+		return ssl_x509.new(pem, "pem")
 	end
 end
 
@@ -165,19 +162,21 @@ local function alpn_select(ssl, protos, version)
 end
 
 local function make_own_cert()
-	local sslext = require "openssl.x509.extension"
-	local sslname = require "openssl.x509.name"
-	local sslaltname = require "openssl.x509.altname"
+	local ssl_x509 = require "openssl.x509"
+	local ssl_ext = require "openssl.x509.extension"
+	local ssl_name = require "openssl.x509.name"
+	local ssl_altname = require "openssl.x509.altname"
+	local ssl_pkey = require "openssl.pkey"
 
 	-- build our certificate
-	local cert = x509.new()
+	local cert = ssl_x509.new()
 	cert:setVersion(3)
 	cert:setSerial(1 + rand.uniform(99999))
 
 	-- get name of host as CN and DNS name
 	local host_name = gethostname()
-	local cn = sslname.new()
-	local alt = sslaltname.new()
+	local cn = ssl_name.new()
+	local alt = ssl_altname.new()
 	cn:add("CN", host_name)
 	alt:add("DNS", host_name)
 
@@ -187,9 +186,9 @@ local function make_own_cert()
 	cert:setSubjectAlt(alt)
 
 	-- keyUsage = critical, digitalSignature
-	local ext = sslext.new("keyUsage", "critical,DER", basexx.from_hex("03020780"))
+	local ext = ssl_ext.new("keyUsage", "critical,DER", basexx.from_hex("03020780"))
 	-- extendedKeyUsage = serverAuth, clientAuth
-	local ext2 = sslext.new("extendedKeyUsage", "DER",
+	local ext2 = ssl_ext.new("extendedKeyUsage", "DER",
 		basexx.from_hex("301406082B0601050507030106082B06010505070302"))
 	cert:addExtension(ext)
 	cert:addExtension(ext2)
@@ -201,7 +200,7 @@ local function make_own_cert()
 	cert:setLifetime(issued, expires + 365 * 24 * 60 * 60)
 
 	-- generate private key and sign our certificate
-	local key = pkey.new { type = "EC", curve = "prime256v1" }
+	local key = ssl_pkey.new { type = "EC", curve = "prime256v1" }
 	cert:setPublicKey(key)
 	cert:sign(key)
 
@@ -211,9 +210,8 @@ local function make_own_cert()
 end
 
 local function verify_cert(cert, key, chn)
-	local sslstore = require "openssl.x509.store"
-
-	local store = sslstore.new()
+	local ssl_store = require "openssl.x509.store"
+	local store = ssl_store.new()
 	store:add(ca_file)
 
 	local ok, err, errno = store:verify(cert, chn)
@@ -236,9 +234,12 @@ local function create_ctx(verify)
 	local chn
 	local cert = read_crt(cert_file)
 	local key = read_key(key_file)
+
 	if cert and key then
 		if chain_file then
-			chn = chain.new()
+			local ssl_chain = require "openssl.x509.chain"
+
+			chn = ssl_chain.new()
 			local ca = read_crt(chain_file)
 			if ca then
 				chn:add(ca)
@@ -255,15 +256,16 @@ local function create_ctx(verify)
 		cert, key = make_own_cert()
 	end
 
-	local ctx = sslctx.new("TLS", true)
+	local ssl_ctx = require "openssl.ssl.context"
+	local ctx = ssl_ctx.new("TLS", true)
 	if ctx.setAlpnSelect ~= nil then
 		ctx:setAlpnSelect(alpn_select, 1.1)
 	end
-	ctx:setOptions(sslctx.OP_NO_COMPRESSION +
-		sslctx.OP_NO_SSLv2 +
-		sslctx.OP_NO_SSLv3 +
-		sslctx.OP_NO_TLSv1 +
-		sslctx.OP_NO_TLSv1_1)
+	ctx:setOptions(ssl_ctx.OP_NO_COMPRESSION +
+		ssl_ctx.OP_NO_SSLv2 +
+		ssl_ctx.OP_NO_SSLv3 +
+		ssl_ctx.OP_NO_TLSv1 +
+		ssl_ctx.OP_NO_TLSv1_1)
 	ctx:setCipherList("aECDSA:+AES256:+SHA384:!NULL")
 
 	ctx:setPrivateKey(key)
@@ -353,6 +355,34 @@ local function make_peer_name(agent, room)
 	}
 end
 
+local function get_external_ip()
+	local http_request = require "http.request"
+	local request = http_request.new_from_uri("http://ipinfo.io/ip")
+	local headers, stream, errno = request:go(net_timeout)
+	if not headers then
+		log(stream, errno, "Cannot get external IP")
+		return nil
+	end
+
+	local status = tonumber(headers:get(":status"))
+	if status ~= 200 then
+		log("error status", status, "Cannot get external IP")
+		return nil
+	end
+
+	local body, err, errno = stream:get_body_as_string()
+	if not body then
+		log(err, errno, "Cannot read external IP")
+		return nil
+	end
+
+	if debug_flag then
+		log(nil, nil, "get_external_ip(): %s", body)
+	end
+
+	return body
+end
+
 local function create_peer(wsocket, headers)
 	local room
 
@@ -376,11 +406,14 @@ local function create_peer(wsocket, headers)
 		else
 			room = select(2, wsocket.stream:peername())
 		end
+	end
 
-		-- special hack for handling public IPv4
-		if http_util.is_ip(room) and (room:find("^10%.%d+%.%d+%.%d+$") or
-		room:find("^172%.%d+%.%d+%.%d+$") or room:find("^192%.168%.%d+%.%d+$")) then
-			room = room:match("^(%d+%.%d+%.%d+%.)") .. "255"
+	-- special hack for handling private IPv4
+	if http_util.is_ip(room) and (room:find("^10%.%d+%.%d+%.%d+$") or
+	room:find("^172%.%d+%.%d+%.%d+$") or room:find("^192%.168%.%d+%.%d+$")) then
+		room = get_external_ip()
+		if not room then
+			return nil
 		end
 	end
 
@@ -408,7 +441,7 @@ end
 
 local function send_msg(peer, msg)
 	if peer.ws.readyState < 1 or peer.ws.readyState > 2 then
-        	log("error", 0, "WebSocket for %s already closed", peer.id:sub(1, 8))
+		log("error", 0, "WebSocket for %s already closed", peer.id:sub(1, 8))
 		return nil
 	end
 
@@ -555,6 +588,9 @@ end
 
 local function accept_ws_connection(wsocket, req_headers, res_headers)
 	local peer = create_peer(wsocket, req_headers)
+	if not peer then
+		return
+	end
 
 	local cookie = req_headers:get("cookie")
 	if not cookie or not cookie:find("peerid=") then
@@ -599,6 +635,8 @@ local function get_mime_type(filename)
 		return "audio/mpeg"
 	elseif ext == "ogg" then
 		return "audio/ogg"
+	elseif ext == "pac" or ext == "dat" then
+		return "application/x-ns-proxy-autoconfig"
 	end
 	return nil
 end
@@ -723,22 +761,22 @@ local luadrop_server = assert(http_server.listen {
 	tls = true,
 	ctx = assert(create_ctx()),
 	host = "0.0.0.0",
+	--reuseaddr = true,
 	port = in_port,
+	--reuseport = true,
 	version = 1.1,
-	max_concurrent = 64,
+	max_concurrent = 32,
 	connection_setup_timeout = net_timeout,
-	intra_stream_timeout = net_timeout,
 	onstream = on_stream,
 	onerror = function(server, context, op, err, errno) -- luacheck: ignore 212
-		-- ignore this often TLS handshake error
-		if op ~= "wrap" or not string.find(err or "", "starttls") or errno ~= cerr.EPIPE then
-			local msg = string.format("%s on %s failed {%d, %s}",
-				tostring(op), tostring(context), errno or 0, err or "")
-			local tb = debug.traceback(msg, 2) .. "\n"
-			for line in string.gfind(tb, ".-\n") do
-				log(nil, nil, line)
-			end
+		local msg = string.format("%s on %s failed {%d, %s}",
+			tostring(op), tostring(context), errno or 0, err or "")
+		local tb = debug.traceback(msg, 2) .. "\n"
+		for line in string.gfind(tb, ".-\n") do
+			log(nil, nil, line)
 		end
+		collectgarbage()
+		log(nil, nil, "Garbage collecting completed")
 	end
 })
 
