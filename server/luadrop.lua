@@ -1,7 +1,8 @@
 #!/opt/bin/env lua
 
 --[[
-Luadrop HTTPS and WebSocket server.
+Luadrop backend HTTPS and WebSocket server.
+Luadrop is web service for changing files like Snapdrop.
 ]]
 
 local io = require "io"
@@ -23,28 +24,28 @@ local http_headers = require "http.headers"
 local http_server = require "http.server"
 local http_ws = require "http.websocket"
 
--- constants
+-- server constants
 local server_info = string.format("%s/%s", http_version.name, http_version.version)
 local uri_pattern = patterns.uri_reference * lpeg.P(-1)
 local path_pattern = patterns.path * lpeg.P(-1)
 local start_page = "/index.html"
-local net_timeout = 10
-local ping_timeout = 40
+local net_timeout = 8
+local ping_timeout = 32
 
--- server comman line options
+-- server options, can be changed by comman line
 local debug_flag = false
 local in_port = 443
 local www_dir = "/opt/share/www"
-local log_file = "/tmp/luadrop.log"
+local log_file = "/opt/var/log/luadrop.log"
 local cert_file = "/opt/etc/ssl/certs/server.crt"
 local chain_file = "/opt/etc/ssl/certs/ca.crt"
 local key_file = "/opt/etc/ssl/private/server.key"
 local ca_file = "/opt/etc/ssl/cert.pem"
 
--- common list of rooms and peers in every room
+-- common list of rooms and peers in rooms
 local room_list = {}
 
--- For compatibility with __ipairs() and Lua 5.1
+-- for compatibility with __ipairs() and Lua 5.1
 local old_ipairs = ipairs
 local ipairs = function(t)
 	local metatable = getmetatable(t)
@@ -56,9 +57,8 @@ end
 
 local function log(err, errno, msg, ...)
 	local out = msg:format(...)
-
 	if err or errno then
-		out = out .. string.format(" {%d, %s}", errno or 0, err or "*")
+		out = out..string.format(" {%d, %s}", errno or 0, err or "*")
 	end
 
 	io.stderr:write(os.date("[%H:%M:%S] "), out, "\n")
@@ -76,9 +76,13 @@ local function log(err, errno, msg, ...)
 	end
 end
 
-local function gethostname()
-	for _, mode in ipairs{ "d", "f", "s" } do
-		local fd = io.popen("hostname -" .. mode)
+local function gethostname(option)
+	local list = { "f", "d", "i", "s" }
+	if option then
+		list = { option }
+	end
+	for _, mode in ipairs(list) do
+		local fd = io.popen("hostname -"..mode)
 		if fd then
 			local hostname = fd:read("*a")
 			fd:close()
@@ -101,14 +105,14 @@ end
 local function validate_dir(path)
 	assert(path_pattern:match(path), "invalid path")
 	local dir = http_util.resolve_relative_path("./", path)
-	assert(bit.band(assert(stat.stat(dir)).st_mode, stat.S_IFDIR) ~= 0, dir .." not a directory")
+	assert(bit.band(assert(stat.stat(dir)).st_mode, stat.S_IFDIR) ~= 0, dir.." not a directory")
 	return dir
 end
 
 local function validate_file(path)
 	assert(path_pattern:match(path), "invalid path")
 	local file = http_util.resolve_relative_path("./", path)
-	assert(bit.band(assert(stat.stat(file)).st_mode, stat.S_IFREF) ~= 0, file .." not a file")
+	assert(bit.band(assert(stat.stat(file)).st_mode, stat.S_IFREF) ~= 0, file.." not a file")
 	return file
 end
 
@@ -131,8 +135,12 @@ local function get_options()
 			log_file = validate_file(a:sub(4))
 		elseif a:sub(2, 2) == "d" then
 			debug_flag = true
+		else
+			log(nil, nil, "Unknown option")
+			return nil
 		end
 	end
+	return true
 end
 
 local function read_key(filename)
@@ -171,10 +179,10 @@ local function make_own_cert()
 	-- build our certificate
 	local cert = ssl_x509.new()
 	cert:setVersion(3)
-	cert:setSerial(1 + rand.uniform(99999))
+	cert:setSerial(1 + rand.uniform(999999))
 
-	-- get name of host as CN and DNS name
-	local host_name = gethostname()
+	-- get name of domain as CN and DNS name
+	local host_name = gethostname("d")
 	local cn = ssl_name.new()
 	local alt = ssl_altname.new()
 	cn:add("CN", host_name)
@@ -187,10 +195,10 @@ local function make_own_cert()
 
 	-- keyUsage = critical, digitalSignature
 	local ext = ssl_ext.new("keyUsage", "critical,DER", basexx.from_hex("03020780"))
+	cert:addExtension(ext)
 	-- extendedKeyUsage = serverAuth, clientAuth
 	local ext2 = ssl_ext.new("extendedKeyUsage", "DER",
 		basexx.from_hex("301406082B0601050507030106082B06010505070302"))
-	cert:addExtension(ext)
 	cert:addExtension(ext2)
 	cert:setBasicConstraints { CA = true, pathLen = 0 }
 	cert:setBasicConstraintsCritical(true)
@@ -216,11 +224,11 @@ local function verify_cert(cert, key, chn)
 
 	local ok, err, errno = store:verify(cert, chn)
 	if not ok then
-		log(err, errno, "Verification failed")
+		log(err, errno, "Certificate verification failed")
 		return nil
 	end
 
-	log(nil, nil, "Verification successful")
+	log(nil, nil, "Certificate verification successful")
 	if debug_flag then
 		for _, val in ipairs(err) do
 			log(nil, nil, val:text())
@@ -258,15 +266,13 @@ local function create_ctx(verify)
 
 	local ssl_ctx = require "openssl.ssl.context"
 	local ctx = ssl_ctx.new("TLS", true)
-	if ctx.setAlpnSelect ~= nil then
-		ctx:setAlpnSelect(alpn_select, 1.1)
-	end
+	ctx:setAlpnSelect(alpn_select, 1.1)
+	ctx:setCipherList("EECDH:RSA+AES:!NULL:!SSLv3")
 	ctx:setOptions(ssl_ctx.OP_NO_COMPRESSION +
+		ssl_ctx.OP_SINGLE_ECDH_USE +
 		ssl_ctx.OP_NO_SSLv2 +
-		ssl_ctx.OP_NO_SSLv3 +
-		ssl_ctx.OP_NO_TLSv1 +
-		ssl_ctx.OP_NO_TLSv1_1)
-	ctx:setCipherList("aECDSA:+AES256:+SHA384:!NULL")
+		ssl_ctx.OP_NO_SSLv3)
+	ctx:setGroups("P-521:P-384:P-256")
 
 	ctx:setPrivateKey(key)
 	ctx:setCertificate(cert)
@@ -279,11 +285,11 @@ end
 
 -- return uuid of form xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
 local function uuid_v4()
-	return basexx.to_hex(rand.bytes(4)) .. "-" ..
-		basexx.to_hex(rand.bytes(2)) .. "-4" ..
-		basexx.to_hex(rand.bytes(2)):sub(1, 3) .. "-" ..
-		string.format("%1X", rand.uniform(4) + 8) ..
-		basexx.to_hex(rand.bytes(2)):sub(1, 3) .. "-" ..
+	return basexx.to_hex(rand.bytes(4)).."-"..
+		basexx.to_hex(rand.bytes(2)).."-4"..
+		basexx.to_hex(rand.bytes(2)):sub(1, 3).."-"..
+		string.format("%1X", rand.uniform(4) + 8)..
+		basexx.to_hex(rand.bytes(2)):sub(1, 3).."-"..
 		basexx.to_hex(rand.bytes(6))
 end
 
@@ -299,7 +305,7 @@ local function unique_name_generator(room)
 		"Pudding", "Gelato", "Cream", "Candy", "Fudge", "Chocolate", "Punch", "Pie", "Cereal",
 		"Bubble", "Gum", "Cheese", "Coffe", "Mimosa", "Zkittlez", "Snack", "Munchie" }
 	repeat
-		name = adjective_dict[rand.uniform(#adjective_dict) + 1] .. " " ..
+		name = adjective_dict[rand.uniform(#adjective_dict) + 1].." "..
 			noun_dict[rand.uniform(#noun_dict) + 1]
 		for _, p in pairs(room_list[room] or {}) do
 			if name == p.name.displayName then
@@ -322,22 +328,25 @@ local function make_peer_name(agent, room)
 		type = "tablet"
 	end
 
+	local os = agent:match("(Android)") or agent:match("(Windows)") or agent:match("(Linux)")
+
 	local dict = { "compatible;", " Mobile[/%w%.]*", " Version/[%d%.]*", " Gecko[/%w%.]*",
 		"%s[%w]-_[_%w]*", "%s[%w]-:[%w%.]*", "%s%a%a[%-]%a%a[^%a]", "%sCPU", "%sIntel",
 		"%sBuild.-[%s;]", "%slike", "%sOS%s", "%s;", "%s+" }
-	for _, i in ipairs(dict) do
-		agent = agent:gsub("%s*" .. i .. "%s*", " ")
+	for _, item in ipairs(dict) do
+		agent = agent:gsub("%s*"..item.."%s*", " ")
 	end
-
 	local model = agent:match("^.-%(%s*([%w%-%.]*)")
 	local browser = agent:match("^.*%)%s*(%w*)")
-	local os = agent:match("^.-%s*([_%-%w%s]-)%s*%)")
+	os = os or agent:match("^.-%s*([_%-%w%s]-)%s*%)")
 
 	local device
-	if type == "desktop" and os and #os > 0 and browser and #browser > 0 then
-		device = os .. " " .. browser
+	if type == "mobile" and model then
+		device = model
+	elseif os and browser then
+		device = os.." "..browser
 	else
-		device = model or "Unknown device"
+		device = "Unknown device"
 	end
 
 	if debug_flag then
@@ -355,7 +364,12 @@ local function make_peer_name(agent, room)
 	}
 end
 
+local external_ip
 local function get_external_ip()
+	if external_ip then
+		return external_ip
+	end
+
 	local http_request = require "http.request"
 	local request = http_request.new_from_uri("http://ipinfo.io/ip")
 	local headers, stream, errno = request:go(net_timeout)
@@ -370,17 +384,18 @@ local function get_external_ip()
 		return nil
 	end
 
-	local body, err, errno = stream:get_body_as_string()
-	if not body then
+	local err
+	external_ip, err, errno = stream:get_body_as_string()
+	if not external_ip then
 		log(err, errno, "Cannot read external IP")
 		return nil
 	end
 
 	if debug_flag then
-		log(nil, nil, "get_external_ip(): %s", body)
+		log(nil, nil, "get_external_ip(): %s", external_ip)
 	end
 
-	return body
+	return external_ip
 end
 
 local function create_peer(wsocket, headers)
@@ -408,9 +423,15 @@ local function create_peer(wsocket, headers)
 		end
 	end
 
-	-- special hack for handling private IPv4
+	-- hack for handling IPv4-in-IPv6 addresses
+	if room:find("^::ffff:[:%.%x]+$") then
+		room = room:match("^::ffff:(.+)"):gsub(":", ".")
+	end
+
+	-- hack for handling private IPv4 and IPv6 addresses
 	if http_util.is_ip(room) and (room:find("^10%.%d+%.%d+%.%d+$") or
-	room:find("^172%.%d+%.%d+%.%d+$") or room:find("^192%.168%.%d+%.%d+$")) then
+	room:find("^172%.%d+%.%d+%.%d+$") or room:find("^192%.168%.%d+%.%d+$") or
+	room:find("^f[:%x]+$")) then
 		room = get_external_ip()
 		if not room then
 			return nil
@@ -459,7 +480,7 @@ local function send_msg(peer, msg)
 end
 
 local function add_peer_to_room(peer)
-	log(nil, nil, "Peer %s adding to room %s", peer.id:sub(1, 8), peer.room)
+	log(nil, nil, "Peer %s is adding to room %s", peer.id:sub(1, 8), peer.room)
 
 	local room = room_list[peer.room]
 	if room and next(room) then
@@ -504,7 +525,7 @@ local function add_peer_to_room(peer)
 end
 
 local function remove_peer_from_room(peer)
-	log(nil, nil, "Peer %s removing from room %s", peer.id:sub(1, 8), peer.room)
+	log(nil, nil, "Peer %s is leaving room %s", peer.id:sub(1, 8), peer.room)
 
 	-- the room does not exist already
 	if not room_list[peer.room] then
@@ -537,35 +558,34 @@ local function serve_peer(peer)
 	repeat
 		-- exit from loop on disappirance peer in common list
 		if not room_list[peer.room] or not room_list[peer.room][peer.id] then
-			return
+			return nil
 		end
 
 		-- do ping-pong for keeping WebSocket connection alive
 		ok, err, errno = peer.ws:send_ping("Are you alive?")
 		if not ok then
 			log(err, errno, "Pinging WebSocket connection failed")
-			return
+			return nil
 		end
 
 		-- keeping connection with browser application
 		if monotime() > (last_answer + ping_timeout * 2) then
 			log(nil, nil, "Timeout for answer from %s expired", peer.id:sub(1, 8))
-			return
+			return nil
 		elseif monotime() > (last_answer + ping_timeout) then
 			if not send_msg(peer, { type = "ping" }) then
-				return
+				return nil
 			end
 		end
 
 		-- timeout for WebSocket ping-pong decreased to 10 sec 
 		ok, err, errno = peer.ws:receive(net_timeout)
 		if ok and err == "text" then
-
 			local msg = json.decode(ok)
 			if type(msg) == "table" and msg["type"] then
 				if msg.type == "disconnect" then
 					-- the peer left the room
-					return
+					return true
 				elseif msg.type == "pong" then
 					-- save time of answer from the peer
 					last_answer = monotime()
@@ -584,37 +604,60 @@ local function serve_peer(peer)
 		or (not ok and errno ~= cerr.ETIMEDOUT)
 
 	log(err, errno, "WebSocket connection was lost")
+	return nil
+end
+
+local function write_res_headers(stream, headers, eos)
+	if debug_flag then
+		local ip = select(2, stream:peername())
+		for name, val in headers:each() do
+			log(nil, nil, "%s < %s: %s", ip, name, val)
+		end
+	end
+
+	local ok, err, errno = stream:write_headers(headers, eos, net_timeout)
+	if not ok then
+		log(err, errno, "Writing response headers failed")
+		return nil
+	end
+	return true
 end
 
 local function accept_ws_connection(wsocket, req_headers, res_headers)
 	local peer = create_peer(wsocket, req_headers)
 	if not peer then
-		return
+		res_headers:upsert(":status", "500")
+		return write_res_headers(wsocket.stream, res_headers, true)
 	end
 
 	local cookie = req_headers:get("cookie")
 	if not cookie or not cookie:find("peerid=") then
-		res_headers:append("set-cookie", "peerid=" .. peer.id .. "; SameSite=Strict; Secure")
+		res_headers:append("set-cookie", "peerid="..peer.id.."; SameSite=Strict; Secure")
 	end
 
 	local ok, err, errno = wsocket:accept({ headers = res_headers }, net_timeout)
 	if not ok then
 		log(err, errno, "WebSocket connection not accepted")
-		return
+		res_headers:upsert(":status", "520")
+		return write_res_headers(wsocket.stream, res_headers, true)
 	end
 
 	if add_peer_to_room(peer) then
 		serve_peer(peer)
 	end
-	wsocket:close(nil, "disconnect", net_timeout)
 
+	wsocket:close(nil, "disconnect", net_timeout)
 	remove_peer_from_room(peer)
+
+	return true
 end
 
-----------------------------------------------------
+local function get_mime_type(path)
+	if path == "/wpad.dat" then
+		return "application/x-ns-proxy-autoconfig"
+	end
 
-local function get_mime_type(filename)
-	local ext = filename:match("^.+%.(%w+)$")
+	local ext = path:match("^.+%.(%w+)$")
 	if not ext or ext == "" then
 		return nil
 	elseif ext == "html" or ext == "htm" then
@@ -635,26 +678,8 @@ local function get_mime_type(filename)
 		return "audio/mpeg"
 	elseif ext == "ogg" then
 		return "audio/ogg"
-	elseif ext == "pac" or ext == "dat" then
-		return "application/x-ns-proxy-autoconfig"
 	end
 	return nil
-end
-
-local function write_headers(stream, headers, eos)
-	if debug_flag then
-		local ip = select(2, stream:peername())
-		for name, val in headers:each() do
-			log(nil, nil, "%s %s: %s", ip, name, val)
-		end
-	end
-
-	local ok, err, errno = stream:write_headers(headers, eos, net_timeout)
-	if not ok then
-		log(err, errno, "Writing response headers failed")
-		return true, true
-	end
-	return true
 end
 
 local function on_stream(server, stream) -- luacheck: ignore 212
@@ -667,19 +692,26 @@ local function on_stream(server, stream) -- luacheck: ignore 212
 	if debug_flag then
 		local ip = select(2, stream:peername())
 		for name, val in req_headers:each() do
-			log(nil, nil, "%s %s: %s", ip, name, val)
+			log(nil, nil, "%s > %s: %s", ip, name, val)
 		end
 	end
-	
+
 	local res_headers = http_headers.new()
 	res_headers:append(":status", nil)
 	res_headers:append("server", server_info)
 	res_headers:append("date", http_util.imf_date())
-	if req_headers:has("origin") then
-		res_headers:append("access-control-allow-origin", "*")
-	end
 
 	local req_method = req_headers:get(":method")
+	if req_method == "GET" then
+		local wsocket = http_ws.new_from_stream(stream, req_headers)
+		if wsocket then
+			accept_ws_connection(wsocket, req_headers, res_headers)
+			assert(stream.state == "closed")
+			return true
+		end
+	end
+
+	res_headers:append("connection", "close")
 	if req_method == "OPTIONS" then
 		res_headers:upsert(":status", "204")
 		if req_headers:has("access-control-request-method") then
@@ -690,29 +722,25 @@ local function on_stream(server, stream) -- luacheck: ignore 212
 			res_headers:append("allow", "OPTIONS, HEAD, GET")
 			res_headers:append("cache-control", "max-age=86400")
 		end
-		return write_headers(stream, res_headers, true)
-	end
-
-	if req_method == "GET" then
-		local wsocket = http_ws.new_from_stream(stream, req_headers)
-		if wsocket then
-			accept_ws_connection(wsocket, req_headers, res_headers)
-			return true
-		end
+		return write_res_headers(stream, res_headers, true)
 	end
 
 	res_headers:append("cache-control", "max-age=86400")
+	if req_headers:has("origin") then
+		res_headers:append("access-control-allow-origin", "*")
+	end
+
 	if req_method ~= "GET" and req_method ~= "HEAD" then
 		res_headers:upsert(":status", "405")
 		res_headers:append("allow", "OPTIONS, HEAD, GET")
-		return write_headers(stream, res_headers, true)
+		return write_res_headers(stream, res_headers, true)
 	end
 
 	local path = req_headers:get(":path")
 	local uri = uri_pattern:match(path)
 	if not uri then
 		res_headers:upsert(":status", "404")
-		return write_headers(stream, res_headers, true)
+		return write_res_headers(stream, res_headers, true)
 	end
 
 	path = http_util.resolve_relative_path("/", uri.path)
@@ -724,11 +752,12 @@ local function on_stream(server, stream) -- luacheck: ignore 212
 	local mime_type = get_mime_type(path)
 	if not mime_type then
 		res_headers:upsert(":status", "415")
-		return write_headers(stream, res_headers, true)
+		return write_res_headers(stream, res_headers, true)
 	end
 
-	local real_path = www_dir .. path
-	local fd, err, errno = io.open(real_path, "rb")
+	local fd
+	local real_path = www_dir..path
+	fd, err, errno = io.open(real_path, "rb")
 	if not fd then
 		if errno == cerr.ENOENT then
 			code = "404"
@@ -738,67 +767,70 @@ local function on_stream(server, stream) -- luacheck: ignore 212
 			code = "422"
 		end
 		res_headers:upsert(":status", code)
-		return write_headers(stream, res_headers, true)
+		return write_res_headers(stream, res_headers, true)
 	end
 
 	res_headers:upsert(":status", "200")
 	res_headers:append("content-type", mime_type)
-	_, err = write_headers(stream, res_headers, req_method == "HEAD")
-	if not err and req_method == "GET" then
-		local ok, err, errno = stream:write_body_from_file(fd, net_timeout)
+	local ok = write_res_headers(stream, res_headers, req_method == "HEAD")
+	if ok and req_method == "GET" then
+		ok, err, errno = stream:write_body_from_file(fd, net_timeout)
 		if not ok then
 			log(err, errno, "Writing response body failed")
 		end
 	end
 
 	fd:close()
-	return true
+	return ok
 end
 
-get_options()
+local function on_error(server, context, op, err, errno) -- luacheck: ignore 212
+	if op == "wrap" and (errno == cerr.EPIPE or (err and err:find("starttls"))) then
+		return
+	end
+
+	local tb = debug.traceback(msg)
+	log(nil, nil, "%s on %s failed {%d, %s}", op, tostring(context), errno or 0, err or "")
+	for line in string.gfind(tb, ".-\n") do
+		log(nil, nil, line:gsub("\n", ""))
+	end
+
+	collectgarbage()
+	log(nil, nil, "Garbage collecting completed")
+end
+
+if not get_options() then
+	os.exit(1)
+end
 
 local luadrop_server = assert(http_server.listen {
 	tls = true,
 	ctx = assert(create_ctx()),
-	host = "0.0.0.0",
-	--reuseaddr = true,
+	host = "::",
+	reuseaddr = true,
 	port = in_port,
-	--reuseport = true,
 	version = 1.1,
 	max_concurrent = 32,
 	connection_setup_timeout = net_timeout,
+	intra_stream_timeout = net_timeout,
 	onstream = on_stream,
-	onerror = function(server, context, op, err, errno) -- luacheck: ignore 212
-		local msg = string.format("%s on %s failed {%d, %s}",
-			tostring(op), tostring(context), errno or 0, err or "")
-		local tb = debug.traceback(msg, 2) .. "\n"
-		for line in string.gfind(tb, ".-\n") do
-			log(nil, nil, line)
-		end
-		collectgarbage()
-		log(nil, nil, "Garbage collecting completed")
-	end
+	onerror = on_error
 })
 
 local function signal_handler(signum)
-	local signame = ""
-
-	-- get name of received signal
-	for name, val in pairs(signal) do
-		if type(val) == "number" and signum == val then
-			signame = name
-			break
-		end
+	if not luadrop_server.socket then
+		log(nil, nil, "Received signal #%d, immediatly stop server", signum)
+		os.exit(1)
 	end
 
-	log(nil, nil, "Received signal %s, stopping server", signame)
-
+	log(nil, nil, "Received signal #%d, try to stop server", signum)
 	-- disable new connections to server
 	luadrop_server:pause()
-	-- remove all peers from rooms
+	-- remove all peers from all rooms
 	room_list = {}
-	-- close main socket of server
+	-- close main server socket
 	luadrop_server:close()
+	luadrop_server:resume()
 end
 
 signal.signal(signal.SIGTERM, signal_handler)
@@ -806,8 +838,8 @@ signal.signal(signal.SIGQUIT, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGHUP, signal_handler)
 
--- Manually call listen() so that we are bound before calling localname()
 do
+	-- Manually call listen() so that we are bound before calling localname()
 	local ok, err, errno = luadrop_server:listen(net_timeout)
 	if not ok then
 		log(err, errno, "Initialization failed")
@@ -815,8 +847,7 @@ do
 	end
 
 	log(nil, nil, "Server '%s' started and listening on port %d",
-		gethostname(),
-		select(3, luadrop_server:localname()))
+		gethostname(), select(3, luadrop_server:localname()))
 end
 
 -- Start the main server loop
